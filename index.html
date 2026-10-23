@@ -2,20 +2,22 @@
 <html lang="pt-BR">
 <head>
 <meta charset="utf-8">
+<base href="/">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<link rel="manifest" href="manifest.webmanifest">
+<title>SemPanela</title>
+<link rel="manifest" href="/manifest.webmanifest">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="SemPanela">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="description" content="O app que organiza a sua pelada">
-<link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png">
-<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<link rel="icon" type="image/png" sizes="192x192" href="/icons/icon-192.png">
+<link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
 <style>body{padding-top:env(safe-area-inset-top,0px)}</style>
-<title>SemPanela</title>
+<script src="/vendor/supabase.js"></script>
+<script src="/config.js"></script>
 <meta name="claude:viewport-fit-sides" content="cover">
-
-
+<link rel="apple-touch-icon" href="data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A//www.w3.org/2000/svg%22%20viewBox%3D%220%200%20512%20512%22%3E%3Crect%20width%3D%22512%22%20height%3D%22512%22%20rx%3D%22112%22%20fill%3D%22%230B3D2B%22/%3E%3Cg%20transform%3D%22translate%280%20-14%29%22%3E%3Cg%20fill%3D%22none%22%20stroke%3D%22%23B8F26B%22%20stroke-width%3D%2228%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%3E%3Cline%20x1%3D%2292%22%20y1%3D%22170%22%20x2%3D%22420%22%20y2%3D%22170%22/%3E%3Cline%20x1%3D%2258%22%20y1%3D%22232%22%20x2%3D%22116%22%20y2%3D%22232%22/%3E%3Cline%20x1%3D%22396%22%20y1%3D%22232%22%20x2%3D%22454%22%20y2%3D%22232%22/%3E%3Cpath%20d%3D%22M116%20170V328Q116%20372%20160%20372H352Q396%20372%20396%20328V170%22/%3E%3Cline%20x1%3D%22256%22%20y1%3D%22170%22%20x2%3D%22256%22%20y2%3D%22372%22/%3E%3Ccircle%20cx%3D%22256%22%20cy%3D%22270%22%20r%3D%2246%22/%3E%3C/g%3E%3Ccircle%20cx%3D%22256%22%20cy%3D%22270%22%20r%3D%2216%22%20fill%3D%22%23B8F26B%22/%3E%3C/g%3E%3C/svg%3E">
 <meta name="theme-color" content="#03130D">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -676,8 +678,8 @@ const lsGet=k=>{try{return localStorage.getItem(k)}catch(e){return null}};
 const lsSet=(k,v)=>{try{localStorage.setItem(k,v);return true}catch(e){return false}};
 const lsDel=k=>{try{localStorage.removeItem(k)}catch(e){}};
 const imgCache={};
-function img(key){if(!key)return null;if(key in imgCache)return imgCache[key];const v=lsGet("img:"+key);imgCache[key]=v;return v;}
-function setImg(key,data){imgCache[key]=data||null;if(data){if(!lsSet("img:"+key,data))hud("Memória do navegador cheia");}else lsDel("img:"+key);}
+function img(key){if(!key)return null;if(key in imgCache)return imgCache[key];const v=lsGet("img:"+key);imgCache[key]=v;if(!v&&CLOUD)cloudImgFetch(key);return v;}
+function setImg(key,data){imgCache[key]=data||null;cloudImg(key,data);if(data){if(!lsSet("img:"+key,data))hud("Memória do navegador cheia");}else lsDel("img:"+key);}
 const uid=()=>Math.random().toString(36).slice(2,9);
 function newPlayer(o){return Object.assign({id:uid(),name:"",a:50,d:50,gk:50,on:true,pos:"AUTO",photo:null,art:null,artPose:null,birth:"",h:null,w:null,games:0,mvp:0},o);}
 function normTxt(t){return String(t).toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g,"").replace(/[^a-z0-9 ]/g," ").replace(/\s+/g," ").trim();}
@@ -725,8 +727,213 @@ if(S.live&&(!S.lastDraw||!S.lastDraw.teams))S.live=null;
 if(S.live&&!S.live.rosters){S.live.rosters=buildRosters(S.lastDraw);S.live.loans=[];S.live.full=Math.max(...S.live.rosters.map(r=>r.length));}
 }
 function buildRosters(D){return D.teams.map((t,i)=>{const g=D.gks&&D.gks[i];return (g?[g]:[]).concat(t);});}
+/* ---------- nuvem (Supabase): contas, peladas compartilhadas e tempo real ---------- */
+const CLOUD=!!(typeof window!=="undefined"&&window.supabase&&window.SP_CFG);
+const sb=CLOUD?window.supabase.createClient(window.SP_CFG.url,window.SP_CFG.key,{auth:{persistSession:true,autoRefreshToken:true,detectSessionInUrl:true}}):null;
+const Cloud={uid:null,email:null,base:{},timer:null,busy:false,again:false,ch:null,pendingRender:false,imgReq:{},imgQ:{},pulling:null,started:false};
+let joinPrev=null,authInfo="",authBusy=false,cloudErr="";
+const isUuid=s=>/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(s||""));
+/* JSON estável (chaves ordenadas), igual para o app e para o banco */
+function stableStr(x){const n=x===undefined?null:JSON.parse(JSON.stringify(x));
+  const w=v=>v===null||typeof v!=="object"?JSON.stringify(v):Array.isArray(v)?"["+v.map(w).join(",")+"]":"{"+Object.keys(v).sort().map(k=>JSON.stringify(k)+":"+w(v[k])).join(",")+"}";return w(n);}
+const jclone=x=>x===undefined?undefined:JSON.parse(JSON.stringify(x));
+const jeq=(a,b)=>stableStr(a)===stableStr(b);
+/* mescla de 3 vias: base = última versão em comum, l = este aparelho, r = servidor */
+function merge3(b,l,r){
+  if(jeq(l,b))return jclone(r);if(jeq(r,b))return jclone(l);if(jeq(l,r))return jclone(l);
+  const isO=v=>v&&typeof v==="object"&&!Array.isArray(v);
+  if(Array.isArray(l)&&Array.isArray(r)){const B=Array.isArray(b)?b:[];
+    const idd=a=>a.every(x=>x&&typeof x==="object"&&!Array.isArray(x)&&x.id!=null);
+    if(idd(l)&&idd(r)&&idd(B)){const mb=new Map(B.map(x=>[x.id,x])),ml=new Map(l.map(x=>[x.id,x])),mr=new Map(r.map(x=>[x.id,x]));const out=[];
+      r.forEach(x=>{const id=x.id;if(ml.has(id))out.push(merge3(mb.get(id),ml.get(id),x));else if(!mb.has(id))out.push(jclone(x));else if(!jeq(mb.get(id),x))out.push(jclone(x));});
+      l.forEach((x,i)=>{if(!mr.has(x.id)&&!mb.has(x.id)){let at=0;for(let j=i-1;j>=0;j--){const k=out.findIndex(y=>y.id===l[j].id);if(k>=0){at=k+1;break;}}out.splice(at,0,jclone(x));}});
+      return out;}
+    if(l.every(x=>x===null||typeof x!=="object")&&r.every(x=>x===null||typeof x!=="object")){const bs=B.map(x=>JSON.stringify(x)),ls=l.map(x=>JSON.stringify(x));
+      const out=r.filter(x=>{const s=JSON.stringify(x);return !(bs.includes(s)&&!ls.includes(s));}).map(jclone);
+      l.forEach(x=>{const s=JSON.stringify(x);if(!bs.includes(s)&&!out.some(y=>JSON.stringify(y)===s))out.push(jclone(x));});return out;}
+    return jclone(l);}
+  if(isO(l)&&isO(r)){const B=isO(b)?b:{},out={};new Set([...Object.keys(r),...Object.keys(l)]).forEach(k=>{
+      const inL=k in l,inR=k in r,inB=k in B;
+      if(inL&&inR)out[k]=merge3(B[k],l[k],r[k]);
+      else if(inL){if(!inB||!jeq(B[k],l[k]))out[k]=jclone(l[k]);}
+      else if(inR){if(!inB||!jeq(B[k],r[k]))out[k]=jclone(r[k]);}});return out;}
+  return jclone(l);}
+
+/* coleções sincronizadas */
+const cleanP=P=>{const o=Object.assign({},P);if(o.state){o.state=Object.assign({},o.state);delete o.state.me;}return o;};
+const COLS={
+  peladas:{list:()=>G.peladas,set:a=>{G.peladas=a;},id:P=>P.id,
+    row:P=>({id:P.id,owner:P.ownerUid,doc:cleanP(P)}),
+    fromRow:r=>{const P=jclone(r.doc)||{};P.id=r.id;P.code=r.code;P.ownerUid=r.owner;if(!P.state)P.state={pelada:{name:"Pelada"},players:[]};fixState(P.state);return P;},
+    canIns:P=>P.ownerUid===Cloud.uid&&!!P.code,canWrite:()=>true},
+  camps:{list:()=>camps(),set:a=>{G.camps=a;},id:c=>c.id,row:c=>({id:c.id,owner:c.ownerUid,doc:c}),fromRow:r=>{const c=jclone(r.doc)||{};c.id=r.id;c.ownerUid=r.owner;return c;},
+    canIns:c=>c.ownerUid===Cloud.uid,canWrite:()=>true},
+  quadras:{list:()=>G.quadras,set:a=>{G.quadras=a;},id:q=>q.id,row:q=>({id:q.id,owner:q.ownerUid,doc:q}),fromRow:r=>{const q=jclone(r.doc)||{};q.id=r.id;q.ownerUid=r.owner;return q;},
+    canIns:q=>q.ownerUid===Cloud.uid,canWrite:q=>q.ownerUid===Cloud.uid||isCreator()},
+  profiles:{list:()=>G.users,set:a=>{G.users=a;},id:u=>u.id,row:u=>({id:u.id,email:u.email,plan:u.plan==="pro"?"pro":"free",doc:u}),
+    fromRow:r=>{const u=jclone(r.doc)||{};u.id=r.id;u.email=r.email;u.plan=r.plan;return u;},
+    canIns:u=>u.id===Cloud.uid,canWrite:u=>!u._stub&&isUuid(u.id)&&(u.id===Cloud.uid||isCreator())}
+};
+const COL_ORDER=["profiles","peladas","camps","quadras"];
+const docStr=(col,it)=>stableStr(COLS[col].row(it).doc);
+function setMe(P){if(!P||!P.state)return;const mp=P.state.players.find(p=>p.uid===Cloud.uid);P.state.me=mp?mp.id:P.state.ownerId;}
+/* coloca no aparelho a versão que veio do servidor */
+function cloudPut(col,r){const C=COLS[col],list=C.list(),i=list.findIndex(x=>C.id(x)===r.id),fresh=C.fromRow(r);
+  if(col==="peladas"){setMe(fresh);if(i>=0){const P=list[i],cur=curP===P;Object.keys(P).forEach(k=>delete P[k]);Object.assign(P,fresh);if(cur){S=P.state;}}else list.push(fresh);}
+  else if(i>=0)list[i]=fresh;else list.push(fresh);
+  Cloud.base[col+":"+r.id]={v:r.version,s:docStr(col,fresh)};}
+function cloudDrop(col,id){const C=COLS[col],list=C.list(),i=list.findIndex(x=>C.id(x)===id);delete Cloud.base[col+":"+id];
+  if(i<0)return;const it=list[i];list.splice(i,1);
+  if(col==="peladas"&&curP===it){curP=null;S=null;closeSheet();setTimeout(()=>{goHome("peladas");hud("Você não está mais nessa pelada");},0);}}
+/* recebe uma linha do servidor e mescla com mudanças locais pendentes */
+function cloudIngest(col,r){const C=COLS[col],key=col+":"+r.id,b=Cloud.base[key],it=C.list().find(x=>C.id(x)===r.id);
+  if(b&&r.version<=b.v&&it)return false;
+  if(!it||!b){cloudPut(col,r);return true;}
+  const ls=docStr(col,it);if(ls===b.s){cloudPut(col,r);return true;}
+  const remote=C.row(C.fromRow(r)).doc,merged=merge3(JSON.parse(b.s),JSON.parse(ls),JSON.parse(stableStr(remote)));
+  cloudPut(col,Object.assign({},r,{doc:merged}));Cloud.base[key]={v:r.version,s:stableStr(remote)};schedule();return true;}
+async function fetchRow(col,id){const {data,error}=await sb.from(col).select("*").eq("id",id).maybeSingle();if(error)throw error;return data;}
+
+/* envia as mudanças deste aparelho */
+function schedule(ms){if(!CLOUD||!Cloud.uid)return;clearTimeout(Cloud.timer);Cloud.timer=setTimeout(flush,ms==null?700:ms);}
+async function flush(){if(!CLOUD||!Cloud.uid)return;if(Cloud.busy){Cloud.again=true;return;}Cloud.busy=true;Cloud.again=false;let fail=false;
+  try{await flushImgs();if(isCreator())await flushCfg();for(const col of COL_ORDER)await flushCol(col);}
+  catch(e){fail=true;console.warn("[SemPanela] sync",e);}
+  finally{Cloud.busy=false;lsCache();if(Cloud.again)schedule(50);else if(fail)schedule(15000);}}
+async function flushCol(col){const C=COLS[col],seen=new Set();
+  for(const it of C.list().slice()){const id=C.id(it);if(!id)continue;seen.add(id);const key=col+":"+id,b=Cloud.base[key],row=C.row(it),s=stableStr(row.doc);
+    if(b&&b.s===s)continue;
+    if(!b){if(!C.canIns(it))continue;const {data,error}=await sb.from(col).insert(row).select().single();
+      if(error){if(error.code==="23505"){const d=await fetchRow(col,id);if(d)cloudIngest(col,d);continue;}throw error;}
+      if(docStr(col,it)===s)cloudPut(col,data);else Cloud.base[key]={v:data.version,s:stableStr(C.row(C.fromRow(data)).doc)};continue;}
+    if(!C.canWrite(it))continue;
+    const upd={doc:row.doc,version:b.v+1};if(col==="profiles")upd.plan=row.plan;
+    const {data,error}=await sb.from(col).update(upd).eq("id",id).select();
+    if(error){if(/version_conflict/.test(error.message||"")||error.code==="40001"){const d=await fetchRow(col,id);if(!d){cloudDrop(col,id);continue;}Cloud.base[key].v=Math.min(b.v,d.version-1);cloudIngest(col,d);continue;}throw error;}
+    if(!data||!data.length){const d=await fetchRow(col,id);if(d)cloudPut(col,d);else cloudDrop(col,id);renderSoon();continue;}
+    if(docStr(col,it)===s){cloudPut(col,data[0]);if(stableStr(C.row(C.fromRow(data[0])).doc)!==s)renderSoon();}
+    else Cloud.base[key]={v:data[0].version,s:stableStr(C.row(C.fromRow(data[0])).doc)};}
+  for(const key of Object.keys(Cloud.base)){if(!key.startsWith(col+":"))continue;const id=key.slice(col.length+1);if(seen.has(id))continue;
+    delete Cloud.base[key];if(col==="profiles")continue;const {error}=await sb.from(col).delete().eq("id",id);if(error)console.warn(error);}}
+async function flushCfg(){const b=Cloud.base["cfg"],s=stableStr(G.cfg);if(!b||b.s===s)return;
+  const {data,error}=await sb.from("app_config").update({doc:JSON.parse(s),version:b.v+1}).eq("id",1).select();
+  if(error){const {data:d}=await sb.from("app_config").select("*").eq("id",1).maybeSingle();if(d){G.cfg=Object.assign(G.cfg,merge3(JSON.parse(b.s),JSON.parse(s),d.doc));Cloud.base["cfg"]={v:d.version,s:stableStr(d.doc)};schedule();}return;}
+  if(data&&data[0])Cloud.base["cfg"]={v:data[0].version,s:stableStr(data[0].doc)};}
+async function flushImgs(){for(const k of Object.keys(Cloud.imgQ)){const d=Cloud.imgQ[k];
+  const {error}=d?await sb.from("images").upsert({key:k,data:d}):await sb.from("images").delete().eq("key",k);
+  if(error&&!/row-level security|violates/.test(error.message||""))throw error;delete Cloud.imgQ[k];}}
+function cloudImg(key,data){if(!CLOUD)return;Cloud.imgQ[key]=data||null;schedule(200);}
+function cloudImgFetch(key){if(!CLOUD||!Cloud.uid||Cloud.imgReq[key])return;Cloud.imgReq[key]=1;
+  sb.from("images").select("data").eq("key",key).maybeSingle().then(({data})=>{if(data&&data.data){imgCache[key]=data.data;lsSet("img:"+key,data.data);renderSoon();}},()=>{delete Cloud.imgReq[key];});}
+
+/* baixa tudo o que a pessoa pode ver */
+async function pull(){if(Cloud.pulling)return Cloud.pulling;Cloud.pulling=(async()=>{try{
+  const [cfg,...res]=await Promise.all([sb.from("app_config").select("*").eq("id",1).maybeSingle(),...COL_ORDER.map(c=>sb.from(c).select("*"))]);
+  if(cfg.error)throw cfg.error;res.forEach(x=>{if(x.error)throw x.error;});
+  if(cfg.data){const b=Cloud.base["cfg"],loc=stableStr(G.cfg);
+    G.cfg=Cloud.email===CREATOR&&b&&loc!==b.s?merge3(JSON.parse(b.s),JSON.parse(loc),cfg.data.doc):jclone(cfg.data.doc);
+    Cloud.base["cfg"]={v:cfg.data.version,s:stableStr(cfg.data.doc)};cfgDefaults();}
+  COL_ORDER.forEach((col,i)=>{const rows=res[i].data||[],ids=new Set(rows.map(r=>r.id));rows.forEach(r=>cloudIngest(col,r));
+    Object.keys(Cloud.base).filter(k=>k.startsWith(col+":")).map(k=>k.slice(col.length+1)).filter(id=>!ids.has(id)).forEach(id=>cloudDrop(col,id));
+    if(col==="profiles")G.users=G.users.filter(u=>!u._stub||!ids.has(u.id));});
+  G.peladas.forEach(setMe);lsCache();return true;}finally{Cloud.pulling=null;}})();return Cloud.pulling;}
+
+/* tempo real */
+function subscribe(){if(Cloud.ch)sb.removeChannel(Cloud.ch);let down=false;
+  Cloud.ch=sb.channel("sp-"+Cloud.uid);
+  ["peladas","camps","quadras","profiles"].forEach(t=>Cloud.ch.on("postgres_changes",{event:"*",schema:"public",table:t},e=>onRemote(t,e)));
+  Cloud.ch.on("postgres_changes",{event:"*",schema:"public",table:"app_config"},()=>{pull().then(renderSoon,()=>{});});
+  Cloud.ch.subscribe(st=>{if(st==="SUBSCRIBED"){if(down){down=false;pull().then(renderSoon,()=>{});}}else if(st==="CHANNEL_ERROR"||st==="TIMED_OUT"||st==="CLOSED")down=true;});}
+async function onRemote(col,e){try{const id=(e.new&&e.new.id)||(e.old&&e.old.id);if(!id)return;
+  if(e.eventType==="DELETE"){if(Cloud.base[col+":"+id]){cloudDrop(col,id);renderSoon();}return;}
+  const b=Cloud.base[col+":"+id];if(b&&e.new&&e.new.version!=null&&e.new.version<=b.v)return;
+  const r=await fetchRow(col,id);if(!r){if(b){cloudDrop(col,id);renderSoon();}return;}
+  if(cloudIngest(col,r)){lsCache();renderSoon();}}catch(err){console.warn(err);}}
+
+/* redesenha sem atrapalhar quem está digitando ou com uma janela aberta */
+function renderSoon(){if(!CLOUD)return;const a=document.activeElement;
+  if(sheet||(a&&/^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName))){Cloud.pendingRender=true;return;}
+  Cloud.pendingRender=false;try{if(screen==="app"&&!S)goHome("peladas");else render();}catch(e){console.warn(e);}}
+if(CLOUD){document.addEventListener("focusout",()=>setTimeout(()=>{if(Cloud.pendingRender&&!sheet)renderSoon();},60));
+  addEventListener("online",()=>{if(Cloud.uid){pull().then(renderSoon,()=>{});schedule(100);}});
+  document.addEventListener("visibilitychange",()=>{if(document.visibilityState==="visible"&&Cloud.uid){pull().then(renderSoon,()=>{});schedule(100);}});}
+
+/* cache local (abre rápido e funciona sem internet) */
+function lsCache(){if(!CLOUD)return;G.cloud={uid:Cloud.uid,base:Cloud.base};if(!lsSet(LSG,JSON.stringify(G))){/* cache cheio: guarda sem a base */G.cloud={uid:Cloud.uid,base:{}};lsSet(LSG,JSON.stringify(G));}}
+function cloudReset(){const ui=G&&G.ui||{theme:"auto"};G=emptyG();G.ui=ui;Cloud.base={};Cloud.uid=null;Cloud.email=null;curP=null;S=null;joinPrev=null;
+  if(Cloud.ch){try{sb.removeChannel(Cloud.ch);}catch(e){}Cloud.ch=null;}lsCache();}
+
+/* entrar com a sessão do Supabase */
+async function cloudSignedIn(session){const id=session.user.id;
+  if(G.cloud&&G.cloud.uid&&G.cloud.uid!==id)cloudReset();
+  Cloud.uid=id;Cloud.email=(session.user.email||"").toLowerCase();Cloud.base=(G.cloud&&G.cloud.uid===id&&G.cloud.base)||Cloud.base||{};
+  await pull();
+  let u=meU()||G.users.find(x=>x.id===id);
+  if(!u){u={id,email:Cloud.email,name:(session.user.user_metadata||{}).name||Cloud.email.split("@")[0],pos:"AUTO",photo:null,plan:"free",roles:[],createdAt:Date.now()};G.users.push(u);}
+  if(!G.sess||G.sess.uid!==id)G.sess={uid:id,mode:"peladas",code:null};
+  subscribe();await cloudSeeds(u);lsCache();return u;}
+/* peladas que já nascem prontas para alguns e-mails */
+async function cloudSeeds(u){if(u.seeded||ownedBy(u).length){if(!u.seeded){u.seeded=1;schedule();}return;}
+  const em=u.email;let pl=null,players=null,ownerName=null;
+  if(em===CREATOR){pl="Fut dos Cria";players=fdcPlayers(true);ownerName="Ivan";}
+  else if(SEEDS[em]){pl=SEEDS[em].pelada;players=fdcPlayers(true);ownerName=SEEDS[em].owner;}
+  else if(VIP_NAME[em]&&VIP_NAME[em][1]){pl=VIP_NAME[em][1];players=[];ownerName=VIP_NAME[em][0];}
+  u.seeded=1;if(!pl){schedule();return;}
+  let ow=players.find(p=>nameKey(p.name)===nameKey(ownerName));if(!ow){ow=newPlayer({name:dispName(u)});players.unshift(ow);}ow.uid=u.id;
+  const st={scale:99,pelada:{name:pl,base:5,plan:u.plan,fixedGK:false,matchMin:null,weekday:null,time:"",waLink:""},uniform:{type:"colete",front:null,back:null,model:null,desc:""},players,rounds:[],session:null,lastDraw:null,ownerId:ow.id,me:ow.id,tempAdminId:null,live:null,nudges:[]};
+  fixState(st);try{await cloudCreatePelada(st);}catch(e){console.warn(e);u.seeded=0;}schedule();}
+async function cloudCreatePelada(st){const id="pl_"+uid()+uid(),P={id,code:null,ownerUid:Cloud.uid,createdAt:Date.now(),state:st};
+  const {data,error}=await sb.from("peladas").insert({id,owner:Cloud.uid,doc:cleanP(P)}).select().single();if(error)throw error;
+  cloudPut("peladas",data);lsCache();return data.code;}
+async function cloudPreview(code){const {data,error}=await sb.rpc("find_pelada",{p_code:code});if(error)throw error;if(!data)return null;
+  if(data.ownerUid&&!G.users.some(u=>u.id===data.ownerUid))G.users.push({id:data.ownerUid,name:data.ownerName||"",_stub:1});
+  joinPrev={id:data.id,code:data.code,ownerUid:data.ownerUid,preview:true,state:Object.assign({players:[]},data.state)};return joinPrev;}
+async function openJoinCloud(code){joinErr="";try{const P=pByCode(code)||await cloudPreview(code);
+  if(P){startJoin(P);screen="join";}else{joinFound=null;joinErr=`Não achamos a pelada ${code}. Confira com o Dono de Pelada.`;screen="join";}}
+  catch(e){joinFound=null;joinErr="Sem conexão. Confira a internet e tente de novo.";screen="join";}render();window.scrollTo(0,0);}
+const authMsg=e=>{const m=String(e&&e.message||e||"");
+  if(/already registered|already exists/i.test(m))return "Esse e-mail já tem conta. Toque em Entrar.";
+  if(/invalid login|invalid credentials/i.test(m))return "E-mail ou senha incorretos.";
+  if(/not confirmed/i.test(m))return "Confirme seu e-mail pelo link que enviamos e tente de novo.";
+  if(/at least 6|password should/i.test(m))return "A senha precisa ter pelo menos 6 caracteres.";
+  if(/rate limit|too many|429/i.test(m))return "Muitas tentativas seguidas. Espere alguns minutos e tente de novo.";
+  if(/fetch|network|failed/i.test(m))return "Sem conexão. Confira a internet e tente de novo.";
+  return "Não deu certo: "+m;};
+async function cloudAuth(su,nm,em,pw){authBusy=true;authInfo="";render();
+  try{let r;if(su)r=await sb.auth.signUp({email:em,password:pw,options:{data:{name:nm},emailRedirectTo:location.origin+"/"}});
+    else r=await sb.auth.signInWithPassword({email:em,password:pw});
+    if(r.error){authBusy=false;authErr=authMsg(r.error);render();return;}
+    if(su&&r.data.user&&Array.isArray(r.data.user.identities)&&!r.data.user.identities.length){authBusy=false;authErr="Esse e-mail já tem conta. Toque em Entrar.";render();return;}
+    if(!r.data.session){authBusy=false;authErr="";authMode="login";authInfo="Enviamos um link de confirmação para "+em+". Abra o link no celular e depois entre aqui.";render();return;}
+    screen="loading";render();const u=await cloudSignedIn(r.data.session);authBusy=false;authVals={name:"",email:""};doLogin(u,!u.onboarded);}
+  catch(e){authBusy=false;authErr=authMsg(e);screen="auth";render();}}
+async function cloudStart(){Cloud.started=true;
+  sb.auth.onAuthStateChange((ev,session)=>{
+    if(ev==="PASSWORD_RECOVERY"){screen="newpass";authErr="";render();}
+    else if(ev==="SIGNED_OUT"&&Cloud.uid){cloudReset();G.sess=null;screen="welcome";render();}});
+  let session=null;try{session=(await sb.auth.getSession()).data.session;}catch(e){}
+  if(!session){if(G.cloud&&G.cloud.uid)cloudReset();G.sess=null;return;}
+  const cached=G.cloud&&G.cloud.uid===session.user.id&&G.users.some(u=>u.id===session.user.id);
+  if(cached){Cloud.uid=session.user.id;Cloud.email=(session.user.email||"").toLowerCase();Cloud.base=G.cloud.base||{};
+    cloudSignedIn(session).then(()=>renderSoon(),e=>console.warn(e));return;}
+  screen="loading";render();
+  try{await cloudSignedIn(session);}catch(e){cloudErr="Não consegui carregar seus dados. Confira a internet.";screen="offline";render();throw e;}}
+async function cloudLogout(){try{await sb.auth.signOut();}catch(e){}cloudReset();}
+async function cloudDeleteAccount(){const {error}=await sb.rpc("delete_my_account");if(error)throw error;await cloudLogout();}
+
 const LSG="sempanela-v3",CREATOR="ivanbrasileiro2110@gmail.com";
+function emptyG(){return {v:4,seq:0,users:[],peladas:[],camps:[],quadras:[],sess:null,cfg:{price:"19,90",freePlayers:20,freePeladas:1,proEmails:[],vipSeeded:{}},ui:{theme:"auto"}};}
+function cfgDefaults(){if(!G.cfg)G.cfg={};if(!G.cfg.proEmails)G.cfg.proEmails=[];if(!G.cfg.vipSeeded)G.cfg.vipSeeded={};if(G.cfg.price==null)G.cfg.price="19,90";if(G.cfg.freePlayers==null)G.cfg.freePlayers=20;if(G.cfg.freePeladas==null)G.cfg.freePeladas=1;
+if(!G.quadras)G.quadras=[];if(!G.ui)G.ui={theme:"auto"};
+G.cfg.tiers=Object.assign({quadra:{name:"Quadra",price:"99",campos:2,fixas:15,acessos:1},arena:{name:"Arena",price:"199",campos:5,fixas:0,acessos:3},complexo:{name:"Complexo",price:"399",campos:8,extra:"39",fixas:0,acessos:0}},G.cfg.tiers||{});
+if(G.cfg.pixFee==null)G.cfg.pixFee="1,49";
+if(G.cfg.campPrice==null)G.cfg.campPrice="9,90";}
+const VIP_NAME={"libaniosamuel519@gmail.com":["Samuel","Pelada do Samuel"]};
+/* cópias da Fut dos Cria para outros e-mails */
+const SEEDS={"gusbroliveira@gmail.com":{name:"Gustavo",pelada:"Fut dos Cria",owner:"Gustavo"}};
 let G;try{G=JSON.parse(lsGet(LSG)||"null");}catch(e){G=null}
+if(CLOUD){if(!G||!Array.isArray(G.users)||!G.cloud){const ui=G&&G.ui;G=emptyG();if(ui)G.ui=ui;}}
+else{
 if(!G||!Array.isArray(G.users)){
   let old=null;try{old=JSON.parse(lsGet(LS)||"null");}catch(e){}
   if(!old||!Array.isArray(old.players))old=freshState();
@@ -737,9 +944,9 @@ if(!G||!Array.isArray(G.users)){
   G={v:3,seq:1,users:[iv],peladas:[{id:uid(),code:"SP0001",ownerUid:iv.id,createdAt:Date.now(),state:old}],sess:null,cfg:{price:"19,90",freePlayers:20,freePeladas:1}};
 }
 G.peladas.forEach(P=>fixState(P.state));
+
 if(!G.cfg.proEmails)G.cfg.proEmails=["libaniosamuel519@gmail.com"];if(!G.cfg.vipSeeded)G.cfg.vipSeeded={};
 if(!G.cfg.vipAdd2){G.cfg.vipAdd2=1;if(!G.cfg.proEmails.includes("gusbroliveira@gmail.com"))G.cfg.proEmails.push("gusbroliveira@gmail.com");}
-const VIP_NAME={"libaniosamuel519@gmail.com":["Samuel","Pelada do Samuel"]};
 function ensureVip(){G.cfg.proEmails.forEach(em=>{em=em.trim().toLowerCase();if(!em)return;let u=G.users.find(x=>x.email===em);const nm=VIP_NAME[em]||[em.split("@")[0],""];
   if(!u){u={id:"u_"+Math.random().toString(36).slice(2,9),email:em,name:nm[0],pass:null,pos:"AUTO",photo:null,plan:"pro",roles:[],createdAt:Date.now()};G.users.push(u);}
   u.plan="pro";
@@ -753,8 +960,6 @@ ensureVip();
 /* elenco padrão da Fut dos Cria (lista do Ivan, out/2026) */
 if(!G.cfg.fdcV2){const P=G.peladas.find(x=>x.code==="SP0001");if(P){const st=P.state;FDC_ROSTER.forEach(([n,a,d])=>{const ex=st.players.find(p=>nameKey(p.name)===nameKey(n));if(ex){ex.a=a;ex.d=d;if(nameKey(ex.name)===nameKey(n)&&ex.name!==n&&!ex.uid)ex.name=n;}else st.players.push(newPlayer({name:n,a,d,on:false}));});}
   G.cfg.fdcV2=1;try{localStorage.setItem(LSG,JSON.stringify(G));}catch(e){}}
-/* cópias da Fut dos Cria para outros e-mails */
-const SEEDS={"gusbroliveira@gmail.com":{name:"Gustavo",pelada:"Fut dos Cria",owner:"Gustavo"}};
 (function ensureSeeds(){Object.entries(SEEDS).forEach(([em,o])=>{let u=G.users.find(x=>x.email===em);
   if(!u){u={id:"u_"+Math.random().toString(36).slice(2,9),email:em,name:o.name,pass:null,pos:"AUTO",photo:null,plan:G.cfg.proEmails.includes(em)?"pro":"free",roles:[],createdAt:Date.now()};G.users.push(u);}
   if(G.cfg.vipSeeded[em])return;G.cfg.vipSeeded[em]=1;let c;do{G.seq++;c="SP"+String(G.seq).padStart(4,"0");}while(G.peladas.some(P=>P.code===c));
@@ -762,12 +967,11 @@ const SEEDS={"gusbroliveira@gmail.com":{name:"Gustavo",pelada:"Fut dos Cria",own
   const st={scale:99,pelada:{name:o.pelada,base:5,plan:u.plan,fixedGK:false,matchMin:null,weekday:null,time:"",waLink:""},uniform:{type:"colete",front:null,back:null,model:null,desc:""},players,rounds:[],session:null,lastDraw:null,ownerId:ow.id,me:ow.id,tempAdminId:null,live:null,nudges:[]};
   fixState(st);G.peladas.push({id:"pl_"+Math.random().toString(36).slice(2,9),code:c,ownerUid:u.id,createdAt:Date.now(),state:st});});
   try{localStorage.setItem(LSG,JSON.stringify(G));}catch(e){}})();
-if(!G.quadras)G.quadras=[];if(!G.ui)G.ui={theme:"auto"};
-G.cfg.tiers=Object.assign({quadra:{name:"Quadra",price:"99",campos:2,fixas:15,acessos:1},arena:{name:"Arena",price:"199",campos:5,fixas:0,acessos:3},complexo:{name:"Complexo",price:"399",campos:8,extra:"39",fixas:0,acessos:0}},G.cfg.tiers||{});
-if(G.cfg.pixFee==null)G.cfg.pixFee="1,49";
-if(G.cfg.campPrice==null)G.cfg.campPrice="9,90";
+}
+G.peladas.forEach(P=>fixState(P.state));
+cfgDefaults();
 let S=null,curP=null;
-function save(){if(!lsSet(LSG,JSON.stringify(G)))hud("Não consegui salvar no navegador");}
+function save(){if(CLOUD){lsCache();schedule();return;}if(!lsSet(LSG,JSON.stringify(G)))hud("Não consegui salvar no navegador");}
 
 /* ---------- helpers ---------- */
 const $=id=>document.getElementById(id);
@@ -845,7 +1049,7 @@ function cardHTML(p,mini){
 const meU=()=>G.sess?G.users.find(u=>u.id===G.sess.uid)||null:null;
 const isCreator=()=>{const u=meU();return !!u&&u.email===CREATOR;};
 const ownerU=()=>curP?G.users.find(u=>u.id===curP.ownerUid):null;
-const pByCode=c=>G.peladas.find(P=>P.code===c);
+const pByCode=c=>G.peladas.find(P=>P.code===c)||(joinPrev&&joinPrev.code===c?joinPrev:null);
 const ownedBy=u=>G.peladas.filter(P=>P.ownerUid===u.id);
 const memberOf=u=>G.peladas.filter(P=>P.state.players.some(x=>x.uid===u.id));
 const myPeladas=u=>[...ownedBy(u),...memberOf(u).filter(P=>P.ownerUid!==u.id)];
@@ -863,7 +1067,7 @@ let screen="welcome",authMode="signup",authErr="",authVals={name:"",email:""},pe
 const canEdit=p=>isOwner()||p.id===S.me;
 const canPhoto=p=>p.id===S.me||(!p.uid&&isOwner());
 function roleIn(P,u){const st=P.state,mp=st.players.find(p=>p.uid===u.id);if(P.ownerUid===u.id)return "Dono de Pelada";if(mp&&st.tempAdminId===mp.id)return "Admin da vez";return "Peladeiro";}
-function enterPelada(code){const P=pByCode(code);const u=meU();if(!P||!u)return;closeSheet();curP=P;S=P.state;
+function enterPelada(code){const P=pByCode(code);const u=meU();if(!P||!u||P.preview)return;closeSheet();curP=P;S=P.state;
   const mp=S.players.find(p=>p.uid===u.id);S.me=mp?mp.id:S.ownerId;
   result=null;stale=false;optIdx=0;restoreResult();tab="jogo";jogoSeg=S.live&&!dayClosed()?"aovivo":lActive()&&!isAdmin()?"lista":"presenca";screen="app";
   G.sess.mode="peladas";G.sess.code=code;P.lastSeenAt=Date.now();save();render();window.scrollTo(0,0);
@@ -885,26 +1089,34 @@ function goHome(mode){closeSheet();curP=null;S=null;const u=meU();if(!u){screen=
   if(mode==="creator"){screen="creator";G.sess.mode="creator";}
   else if(mode==="quadras"){screen="quadras";G.sess.mode="quadras";}
   else if(mode==="qsetup"){screen="qsetup";qsDraft={name:"",bairro:"",campos:2,tier:"arena"};}
-  else{G.sess.mode="peladas";screen="home";const P=pendingCode&&pByCode(pendingCode);if(P){startJoin(P);screen="join";}}
+  else{G.sess.mode="peladas";screen="home";const P=pendingCode&&pByCode(pendingCode);if(P){startJoin(P);screen="join";}else if(pendingCode&&CLOUD){const pc=pendingCode;setTimeout(()=>openJoinCloud(pc),0);}}
   save();render();window.scrollTo(0,0);}
 function doLogin(u,isNew){G.sess={uid:u.id,mode:"peladas",code:null};u.lastLogin=Date.now();authErr="";
   if(isNew){obDraft={full:u.name,name:"",pos:u.pos||"AUTO",show:"nick"};screen="onboard";save();render();window.scrollTo(0,0);return;}
   if(u.email===CREATOR&&!pendingCode){screen="creatorPick";save();render();window.scrollTo(0,0);return;}
   goHome("peladas");}
-function logout(){G.sess=null;closeSheet();curP=null;S=null;screen="welcome";authErr="";save();render();window.scrollTo(0,0);}
+function logout(){if(CLOUD)cloudLogout();G.sess=null;closeSheet();curP=null;S=null;screen="welcome";authErr="";save();render();window.scrollTo(0,0);}
 function newCode(){let c;do{G.seq++;c="SP"+String(G.seq).padStart(4,"0");}while(pByCode(c));return c;}
-function createPelada(d){const u=meU();const code=newCode();const owner=newPlayer({name:dispName(u),pos:u.pos||"AUTO",photo:u.photo,uid:u.id});
+function peladaState(d){const u=meU();const owner=newPlayer({name:dispName(u),pos:u.pos||"AUTO",photo:u.photo,uid:u.id});
   const st={scale:99,pelada:{name:d.name,base:d.base,plan:u.plan,fixedGK:false,matchMin:null,weekday:d.weekday,time:d.time,waLink:""},uniform:{type:"colete",front:null,back:null,model:null,desc:""},
     players:[owner],rounds:[],session:null,lastDraw:null,ownerId:owner.id,me:owner.id,tempAdminId:null,live:null,nudges:[]};
-  fixState(st);G.peladas.push({id:uid(),code,ownerUid:u.id,createdAt:Date.now(),state:st});save();return code;}
-function joinPelada(){const u=meU(),P=pByCode(joinFound);if(!u||!P)return;const st=P.state;let p=st.players.find(x=>x.uid===u.id);
+  fixState(st);return st;}
+function createPelada(d){const u=meU();const code=newCode();const st=peladaState(d);G.peladas.push({id:uid(),code,ownerUid:u.id,createdAt:Date.now(),state:st});save();return code;}
+function joinPelada(){const u=meU(),P=pByCode(joinFound);if(!u||!P)return;const st=P.state;
+  if(CLOUD){if(authBusy)return;if(st.players.some(x=>x.uid===u.id)&&!P.preview){pendingCode="";enterPelada(P.code);return;}
+    if(st.pelada.plan!=="pro"&&st.players.length>=G.cfg.freePlayers&&!st.players.some(x=>x.uid===u.id)){joinErr=`“${st.pelada.name}” já tem ${G.cfg.freePlayers} peladeiros, o limite do Plano Grátis. Fale com o Dono de Pelada.`;render();return;}
+    if((!u.pos||u.pos==="AUTO")&&joinDraft.pos!=="AUTO"){u.pos=joinDraft.pos;save();}
+    authBusy=true;render();const np=newPlayer({name:dispName(u),pos:joinDraft.pos,photo:u.photo,uid:u.id,on:false});
+    sb.rpc("join_pelada",{p_code:P.code,p_player:np}).then(({data,error})=>{authBusy=false;
+      if(error||!data){joinErr=error&&/free_limit/.test(error.message||"")?`“${st.pelada.name}” chegou ao limite do Plano Grátis. Fale com o Dono de Pelada.`:"Não deu para entrar agora. Confira a internet e tente de novo.";render();return;}
+      cloudPut("peladas",data);joinPrev=null;pendingCode="";try{history.replaceState(null,"","/");}catch(e){}lsCache();enterPelada(data.code);hud("Você entrou em "+st.pelada.name);},()=>{authBusy=false;joinErr="Sem conexão. Confira a internet e tente de novo.";render();});return;}let p=st.players.find(x=>x.uid===u.id);
   if(!p){if(st.pelada.plan!=="pro"&&st.players.length>=G.cfg.freePlayers){joinErr=`“${st.pelada.name}” já tem ${G.cfg.freePlayers} peladeiros, o limite do Plano Grátis. Fale com o Dono de Pelada.`;render();return;}
     p=newPlayer({name:dispName(u),pos:joinDraft.pos,photo:u.photo,uid:u.id,on:false});st.players.push(p);}
   if((!u.pos||u.pos==="AUTO")&&joinDraft.pos!=="AUTO")u.pos=joinDraft.pos;
-  pendingCode="";if(location.hash)try{history.replaceState(null,"",location.pathname+location.search);}catch(e){}
+  pendingCode="";if(location.hash)try{history.replaceState(null,"",location.pathname+location.search);}catch(e){}joinPrev=null;
   enterPelada(P.code);hud("Você entrou em "+st.pelada.name);}
 function setUserPhoto(u,data){const key="up_"+u.id;setImg(key,data);u.photo=key;G.peladas.forEach(P=>P.state.players.forEach(p=>{if(p.uid===u.id)p.photo=key;}));save();}
-function inviteURL(){return "https://sempanela.app.br/convite/"+curP.code;}
+function inviteURL(){return (CLOUD?location.origin:"https://sempanela.app.br")+"/convite/"+curP.code;}
 function qrSVG(t){try{const q=qrcode(0,"M");q.addData(t);q.make();return q.createSvgTag(5,0);}catch(e){return `<div class="bigcode" style="color:#0A2416;font-size:30px">${esc(curP.code)}</div>`;}}
 const agendaOf=st=>{const w=st.pelada.weekday,t=st.pelada.time;if(w==null&&!t)return "";
   const d=w==null?"":w===0?"Todo domingo":w===6?"Todo sábado":"Toda "+WD[w].toLowerCase()+"-feira";return (d+(t?(d?" às ":"Às ")+t:"")).trim();};
@@ -1687,7 +1899,10 @@ document.addEventListener("visibilitychange",()=>{if(liveFS&&document.visibility
 function setTab(t){tab=t;render();window.scrollTo(0,0);}
 
 function modeSeg(cur){return `<div class="seg" role="group" aria-label="Modo">${modesOf().map(k=>`<button data-act="goMode" data-v="${k}" aria-pressed="${cur===k}">${MODE_L[k]}</button>`).join("")}</div>`;}
-function viewScreen(){return ({welcome:viewWelcome,auth:viewAuth,onboard:viewOnboard,creatorPick:viewCreatorPick,home:viewHome,create:viewCreate,join:viewJoin,creator:viewCreator,qsetup:viewQSetup,quadras:viewQuadras,camp:viewCamp,campNew:viewCampNew}[screen]||viewWelcome)();}
+function viewLoading(){return `<div class="auth"><div class="logo-big">${MARK}<span class="wm">Sem<b>Panela</b></span><p>Carregando suas peladas…</p></div></div>`;}
+function viewOffline(){return `<div class="auth"><div class="logo-big">${MARK}<span class="wm">Sem<b>Panela</b></span><p>${esc(cloudErr||"Sem conexão.")}</p></div><div style="margin-top:22px"><button class="btn" data-act="retryCloud">Tentar de novo</button></div></div>`;}
+function viewNewPass(){return `<div class="hero" style="padding-top:18px"><div class="eyebrow">SemPanela</div><h1>Nova senha</h1><p class="sub">Escolha a senha nova da sua conta.</p></div><div class="section authf"><div class="group"><div class="cell"><label class="lbl" for="npPass">Nova senha</label><input class="inl" id="npPass" type="password" autocomplete="new-password" placeholder="mínimo 6 caracteres"></div></div><div class="err" role="alert">${esc(authErr)}</div></div><button class="btn" data-act="setNewPass" ${authBusy?"disabled":""}>${authBusy?"Aguarde…":"Salvar senha"}</button>`;}
+function viewScreen(){return ({loading:viewLoading,offline:viewOffline,newpass:viewNewPass,welcome:viewWelcome,auth:viewAuth,onboard:viewOnboard,creatorPick:viewCreatorPick,home:viewHome,create:viewCreate,join:viewJoin,creator:viewCreator,qsetup:viewQSetup,quadras:viewQuadras,camp:viewCamp,campNew:viewCampNew}[screen]||viewWelcome)();}
 function viewWelcome(){
   return `<div class="auth"><div class="logo-big">${MARK}<span class="wm">Sem<b>Panela</b></span><p>O app que organiza a sua pelada.</p></div>
   <div class="feats"><span>⚖️ Sorteio equilibrado</span><span>⏱️ Jogo ao vivo</span><span>⭐ Resenha e craque</span></div>
@@ -1704,13 +1919,13 @@ function viewAuth(){
     ${su?`<div class="cell"><label class="lbl" for="aName">Nome</label><input class="inl" id="aName" autocomplete="name" placeholder="Seu nome" value="${esc(authVals.name)}" data-input="aname"></div>`:""}
     <div class="cell"><label class="lbl" for="aEmail">E-mail</label><input class="inl" id="aEmail" type="email" inputmode="email" autocomplete="email" autocapitalize="off" placeholder="voce@email.com" value="${esc(authVals.email)}" data-input="aemail"></div>
     <div class="cell"><label class="lbl" for="aPass">Senha</label><input class="inl" id="aPass" type="password" autocomplete="${su?"new-password":"current-password"}" placeholder="${su?"mínimo 6 caracteres":"sua senha"}" enterkeyhint="go"></div>
-  </div><div class="err" role="alert">${esc(authErr)}</div></div>
+  </div><div class="err" role="alert">${esc(authErr)}</div>${authInfo?`<div class="banner info" style="margin-top:10px"><span class="grow">${esc(authInfo)}</span></div>`:""}</div>
   ${su?"":`<p class="linkline" style="text-align:right;margin:-6px 0 6px"><button data-act="forgot">Esqueci minha senha</button></p>`}
-  <button class="btn" data-act="authSubmit">${su?"Criar conta":"Entrar"}</button>
+  <button class="btn" data-act="authSubmit" ${authBusy?"disabled":""}>${authBusy?"Aguarde…":su?"Criar conta":"Entrar"}</button>
   ${su?`<p class="sf" style="text-align:center">Ao criar a conta você aceita os <u>Termos de uso</u> e a <u>Política de privacidade</u>.</p>`:""}
   <button class="btn ghost" data-act="google" style="margin-top:10px">Continuar com Google</button>
   <p class="linkline" style="margin-top:8px">${su?"Já tem conta?":"Ainda não tem conta?"} <button data-act="goAuth" data-v="${su?"login":"signup"}">${su?"Entrar":"Criar conta"}</button></p>
-  <div class="section"><div class="box testbox"><div class="note"><b>Protótipo.</b> As contas ficam só neste aparelho. A conta ${esc(CREATOR)} já existe com a Fut dos Cria: no primeiro acesso, a senha que você digitar vira a senha dela.</div></div></div>`;
+  ${CLOUD?"":`<div class="section"><div class="box testbox"><div class="note"><b>Protótipo.</b> As contas ficam só neste aparelho. A conta ${esc(CREATOR)} já existe com a Fut dos Cria: no primeiro acesso, a senha que você digitar vira a senha dela.</div></div></div>`}`;
 }
 function viewOnboard(){const u=meU(),d=obDraft,ph=img(u.photo),tmp={name:d.full||u.name,nick:d.name,show:d.show};
   return `<div class="hero"><div class="eyebrow">Bem-vindo ao SemPanela</div><h1>Seu perfil de atleta</h1><p class="sub">Aparece nas peladas em que você entrar. Dá para mudar depois no Perfil.</p></div>
@@ -2565,7 +2780,7 @@ let wipeArm=false;
 
 /* ---------- sheets ---------- */
 function openSheet(s){sheet=s;renderSheet();$("scrim").classList.add("show");$("sheet").classList.add("show");$("sheet").scrollTop=0;}
-function closeSheet(){sheet=null;$("sheet").classList.remove("show");$("scrim").classList.remove("show");}
+function closeSheet(){sheet=null;$("sheet").classList.remove("show");$("scrim").classList.remove("show");if(CLOUD&&Cloud.pendingRender)setTimeout(renderSoon,30);}
 function bar(title,left="Fechar",right="",rAct="",rDis=false){return `<div class="grab"></div><div class="bar"><button class="l" data-act="closeSheet">${left}</button><h2>${title}</h2>${right?`<button class="r" data-act="${rAct}" ${rDis?"disabled":""}>${right}</button>`:"<span></span>"}</div>`;}
 function renderSheet(){
   if(!sheet)return;const E=$("sheet");const t=sheet.type;
@@ -2855,7 +3070,7 @@ function applySession(silent){
       if(vals.length>=2){vals.sort((x,y)=>x-y);const use=vals.length>=5?vals.slice(1,-1):vals;const m=use.reduce((s,x)=>s+x,0)/use.length;p[k]=clampL((p[k]??50)+m*cap[k]);c[k+"1"]=p[k];}});
     changes.push(c);});
   if(mvp){const p=byId(mvp);if(p)p.mvp=(p.mvp||0)+1;}
-  const r={id:uid(),date:ses.date,voters:voters.length,mvp,evolved:pro,changes};
+  const r={id:ses.id?"r_"+ses.id:uid(),date:ses.date,voters:voters.length,mvp,evolved:pro,changes};
   S.rounds.unshift(r);S.session=null;save();if(!silent){render();openSheet({type:"round",id:r.id});}return r;
 }
 async function analyzeUniform(){
@@ -2875,12 +3090,18 @@ document.addEventListener("click",e=>{
     case "tab":setTab(el.dataset.tab);break;
     case "goAuth":authMode=v;authErr="";screen="auth";render();window.scrollTo(0,0);break;
     case "goWelcome":screen="welcome";authErr="";render();break;
-    case "forgot":hud("No app final, enviamos um link para trocar a senha no seu e-mail");break;
+    case "forgot":if(CLOUD){const em=(($("aEmail")||{}).value||"").trim().toLowerCase();authVals.email=em;if(!/^\S+@\S+\.\S+$/.test(em)){authErr="Digite seu e-mail acima e toque de novo em Esqueci minha senha.";authInfo="";render();break;}
+      sb.auth.resetPasswordForEmail(em,{redirectTo:location.origin+"/"}).then(({error})=>{authErr=error?authMsg(error):"";authInfo=error?"":"Enviamos um link para trocar a senha em "+em+". Abra no celular.";render();},e=>{authErr=authMsg(e);render();});break;}
+      hud("No app final, enviamos um link para trocar a senha no seu e-mail");break;
+    case "setNewPass":{const pw=($("npPass")||{}).value||"";if(pw.length<6){authErr="A senha precisa ter pelo menos 6 caracteres.";render();break;}if(authBusy)break;authBusy=true;render();
+      sb.auth.updateUser({password:pw}).then(async({error})=>{authBusy=false;if(error){authErr=authMsg(error);render();return;}authErr="";try{history.replaceState(null,"","/");}catch(e){}const {data}=await sb.auth.getSession();if(data.session){screen="loading";render();try{await cloudSignedIn(data.session);}catch(e){}hud("Senha trocada");goHome("peladas");}else{screen="auth";authMode="login";render();}});break;}
+    case "retryCloud":location.reload();break;
     case "google":hud("No app final, entra direto com a conta Google");break;
     case "authSubmit":{const su=authMode==="signup",nm=(($("aName")||{}).value||"").trim(),em=($("aEmail").value||"").trim().toLowerCase(),pw=$("aPass").value||"";
       authVals={name:nm,email:em};const fail=m=>{authErr=m;render();};
       if(su&&!nm){fail("Digite seu nome.");break;}
       if(!/^\S+@\S+\.\S+$/.test(em)){fail("Digite um e-mail válido.");break;}
+      if(CLOUD){if(authBusy)break;if(pw.length<6){fail(su?"A senha precisa ter pelo menos 6 caracteres.":"Digite sua senha.");break;}authErr="";cloudAuth(su,nm,em,pw);break;}
       let u=G.users.find(x=>x.email===em);
       if(su){if(pw.length<6){fail("A senha precisa ter pelo menos 6 caracteres.");break;}
         if(u&&u.pass!==null){fail("Esse e-mail já tem conta. Toque em Entrar.");break;}
@@ -2892,7 +3113,7 @@ document.addEventListener("click",e=>{
       authVals={name:"",email:""};doLogin(u,false);break;}
     case "goMode":if(v!=="qsetup"&&!modesOf().includes(v))break;goHome(v);break;
     case "obpos":obDraft.pos=v;render();break;
-    case "obDone":{const u=meU();u.name=(($("obFull")||{}).value||"").trim()||u.name;u.nick=(($("obName")||{}).value||"").trim();u.show=u.nick?obDraft.show:"name";u.pos=obDraft.pos;syncUserName(u);save();goHome("peladas");break;}
+    case "obDone":{const u=meU();u.onboarded=1;u.name=(($("obFull")||{}).value||"").trim()||u.name;u.nick=(($("obName")||{}).value||"").trim();u.show=u.nick?obDraft.show:"name";u.pos=obDraft.pos;syncUserName(u);save();goHome("peladas");break;}
     case "obshow":obDraft.show=v;{const x=$("obShow");if(x){const u=meU();x.innerHTML=`<div class="sh"><span>NA CARTA E NA LISTA, APARECER COMO</span></div>`+showSeg({name:obDraft.full||u.name,nick:obDraft.name,show:v},"obshow");}}break;
     case "ushow":{const u=meU();u.show=v;syncUserName(u);save();render();hud("Você aparece como "+dispName(u));break;}
     case "joinBack":pendingCode="";goHome("peladas");break;
@@ -2947,11 +3168,11 @@ document.addEventListener("click",e=>{
     case "cWd":createDraft.weekday=createDraft.weekday===+v?null:+v;render();break;
     case "cBase":createDraft.base=Math.max(2,Math.min(11,createDraft.base+ +v));render();break;
     case "doCreate":{const d=createDraft;d.name=($("cName").value||"").trim();d.time=$("cTime").value||"";if(!d.name){authErr="Dê um nome para a pelada.";render();$("cName").focus();break;}
-      authErr="";const code=createPelada(d);enterPelada(code);setTimeout(()=>hud("Pelada criada · código "+code),200);break;}
+      authErr="";if(CLOUD){if(authBusy)break;authBusy=true;render();cloudCreatePelada(peladaState(d)).then(code=>{authBusy=false;enterPelada(code);setTimeout(()=>hud("Pelada criada · código "+code),200);},()=>{authBusy=false;authErr="Sem conexão. Confira a internet e tente de novo.";render();});break;}const code=createPelada(d);enterPelada(code);setTimeout(()=>hud("Pelada criada · código "+code),200);break;}
     case "goJoin":closeSheet();curP=null;S=null;G.sess.mode="peladas";G.sess.code=null;joinFound=null;joinDraft=null;joinErr="";screen="join";save();render();window.scrollTo(0,0);break;
     case "findPelada":{const raw=($("jCode").value||"").toUpperCase().replace(/\s/g,""),dg=raw.replace(/\D/g,"");
-      if(!dg||dg.length>4){joinErr="O código tem SP e 4 números, por exemplo SP0001.";render();break;}
-      const code="SP"+dg.padStart(4,"0"),P=pByCode(code);if(!P){joinErr=`Não achamos a pelada ${code}. Confira com o Dono de Pelada.`;render();break;}
+      if(!dg||dg.length>6){joinErr="O código tem SP e 4 números, por exemplo SP0001.";render();break;}
+      const code="SP"+dg.padStart(4,"0");if(CLOUD){openJoinCloud(code);break;}const P=pByCode(code);if(!P){joinErr=`Não achamos a pelada ${code}. Confira com o Dono de Pelada.`;render();break;}
       startJoin(P);render();window.scrollTo(0,0);break;}
     case "jPos":joinDraft.pos=v;render();break;
     case "jshow":{const u=meU();u.show=v;syncUserName(u);save();render();break;}
@@ -3216,7 +3437,7 @@ document.addEventListener("click",e=>{
     case "leavePelada":{if(isOwner())break;if(!el.dataset.ok){openSheet({type:"confirm",title:"Sair da pelada",head:"Sair de “"+esc(S.pelada.name)+"”?",text:"Seu card, níveis, gols e assistências nesta pelada serão apagados. Para voltar, você precisa do código ou de um novo convite.",btn:"Sair da pelada",act:"leavePelada"});break;}
       const nm=S.pelada.name,me=S.me;S.players=S.players.filter(p=>p.id!==me);if(S.tempAdminId===me)S.tempAdminId=null;closeSheet();goHome("peladas");hud("Você saiu de "+nm);break;}
     case "delAccount":{const u=meU();if(!el.dataset.ok){openSheet({type:"confirm",title:"Excluir conta",head:"Excluir sua conta?",text:`Essa ação é definitiva. Apagamos seu perfil e suas fotos, as peladas em que você é Dono de Pelada${ownedBy(u).length?" ("+ownedBy(u).map(P=>esc(P.state.pelada.name)).join(", ")+")":""}${myQuadra()?", sua quadra no SemPanela Quadras":""} e seus cards nas outras peladas.`,btn:"Excluir minha conta",act:"delAccount"});break;}
-      closeSheet();G.peladas=G.peladas.filter(P=>P.ownerUid!==u.id);G.peladas.forEach(P=>{P.state.players=P.state.players.filter(p=>p.uid!==u.id);});G.quadras=G.quadras.filter(q=>q.ownerUid!==u.id);
+      closeSheet();if(CLOUD){hud("Excluindo…");cloudDeleteAccount().then(()=>{G.sess=null;screen="welcome";render();hud("Conta excluída");},()=>hud("Não deu para excluir agora. Confira a internet."));break;}G.peladas=G.peladas.filter(P=>P.ownerUid!==u.id);G.peladas.forEach(P=>{P.state.players=P.state.players.filter(p=>p.uid!==u.id);});G.quadras=G.quadras.filter(q=>q.ownerUid!==u.id);
       if(u.photo)setImg(u.photo,null);G.users=G.users.filter(x=>x.id!==u.id);logout();hud("Conta excluída");break;}
     case "copyDay":{const d=S.days.find(x=>x.id===id);copyText(sumulaText(d),"dayText","dayWrap");break;}
     case "myVote":{if(!S.session||!S.session.ids.includes(S.me))break;const prev=S.session.votes[S.me];openSheet({type:"vote",voter:S.me,draft:prev?JSON.parse(JSON.stringify(prev)):{t:{},mvp:null}});break;}
@@ -3252,7 +3473,7 @@ document.addEventListener("click",e=>{
     case "wpose":sheet.w.pose=v;renderSheet();break;
     case "charGen":{const w=sheet.w,p=byId(w.id);p.birth=w.birth;p.h=w.h;p.w=w.w;p.artPose=w.pose;w.generated=true;save();renderSheet();break;}
     case "copyPrompt":{const src=$(el.dataset.src);copyText(src.textContent,el.dataset.src);break;}
-    case "startSession":{const ids=(S.lastDraw&&S.lastDraw.date===today())?S.lastDraw.teams.flat().concat((S.lastDraw.gks||[]).filter(Boolean)):present().map(p=>p.id);S.session={date:today(),ids:ids.filter(byId),votes:{}};save();render();break;}
+    case "startSession":{const ids=(S.lastDraw&&S.lastDraw.date===today())?S.lastDraw.teams.flat().concat((S.lastDraw.gks||[]).filter(Boolean)):present().map(p=>p.id);S.session={id:uid(),date:today(),ids:ids.filter(byId),votes:{}};save();render();break;}
     case "cancelSession":S.session=null;save();render();break;
     case "openVote":{const prev=S.session.votes[id];openSheet({type:"vote",voter:id,draft:prev?JSON.parse(JSON.stringify(prev)):{t:{},mvp:null}});break;}
     case "vote":{const d=sheet.draft;d.t[id]=d.t[id]||{};d.t[id][el.dataset.k]=+v;el.parentElement.querySelectorAll("button").forEach(b=>b.setAttribute("aria-pressed",b===el));break;}
@@ -3343,13 +3564,15 @@ document.addEventListener("keydown",e=>{if(e.key==="Escape")closeSheet();
   if(e.key==="Enter"){const t=e.target.id;if(["aName","aEmail","aPass"].includes(t)){e.preventDefault();document.querySelector('[data-act="authSubmit"]').click();}else if(t==="jCode"){e.preventDefault();document.querySelector('[data-act="findPelada"]').click();}}});
 setInterval(()=>{if(S&&screen==="app"&&S.session&&!sheet&&(tab==="avaliar"||Date.now()>=S.session.closesAt))render();},30000);
 setInterval(()=>{if(!S||!S.live)return;if(checkCap()){hud("Tempo esgotado!");try{navigator.vibrate&&navigator.vibrate([300,150,300]);}catch(e){}if(screen==="app"&&tab==="jogo"&&jogoSeg==="aovivo"&&!sheet)render();else fsRender();return;}const el=$("liveClock");if(el)el.textContent=mmss(liveElapsed());const e2=$("fsClock");if(e2&&!$("fs").hidden)e2.textContent=mmss(liveElapsed());},500);
-(function boot(){const m=location.hash.match(/convite\/?(SP\d{4})/i);if(m)pendingCode=m[1].toUpperCase();applyTheme();
+(async function boot(){const m=(location.pathname+" "+location.hash).match(/convite\/?(SP\d{4,6})/i);if(m)pendingCode=m[1].toUpperCase();applyTheme();
+  if(CLOUD){try{await cloudStart();}catch(e){return;}if(screen==="offline"||screen==="newpass")return;}
   const u=meU();
   if(u&&pendingCode){goHome("peladas");return;}
   if(u){if(G.sess.code&&pByCode(G.sess.code)){enterPelada(G.sess.code);return;}goHome(G.sess.mode||"peladas");return;}
   if(pendingCode){authMode="signup";screen="auth";}
   render();})();
 </script>
+
 <script>
-if('serviceWorker' in navigator){addEventListener('load',function(){navigator.serviceWorker.register('sw.js').catch(function(){});});}
+if('serviceWorker' in navigator){addEventListener('load',function(){navigator.serviceWorker.register('/sw.js').catch(function(){});});}
 </script>
