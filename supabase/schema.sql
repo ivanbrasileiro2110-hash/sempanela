@@ -406,3 +406,22 @@ begin
     end if;
   end loop;
 end $$;
+
+-- ---------- painel do criador: excluir conta de qualquer usuário ----------
+create or replace function public.admin_delete_user(p_uid uuid) returns void
+language plpgsql security definer set search_path = public as $$
+begin
+  if not is_creator() then raise exception 'not_allowed'; end if;
+  if p_uid = auth.uid() then raise exception 'cannot_delete_self'; end if;
+  -- tira o card da pessoa das peladas dos outros
+  update peladas set version = version + 1,
+    doc = jsonb_set(doc, '{state,players}', coalesce((
+      select jsonb_agg(x) from jsonb_array_elements(coalesce(doc->'state'->'players', '[]')) x
+       where x->>'uid' is distinct from p_uid::text), '[]'::jsonb))
+   where owner <> p_uid and exists (
+     select 1 from jsonb_array_elements(coalesce(doc->'state'->'players', '[]')) x where x->>'uid' = p_uid::text);
+  -- apaga a conta (perfil, peladas em que é dono, campeonatos, quadras e fotos vão junto)
+  delete from auth.users where id = p_uid;
+end $$;
+revoke execute on function public.admin_delete_user(uuid) from anon, public;
+grant execute on function public.admin_delete_user(uuid) to authenticated;
