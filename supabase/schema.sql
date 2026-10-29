@@ -407,21 +407,84 @@ begin
   end loop;
 end $$;
 
--- ---------- painel do criador: excluir conta de qualquer usuário ----------
-create or replace function public.admin_delete_user(p_uid uuid) returns void
+-- ---------- Acesso Total (cortesia: tudo do Pro, sem cobrança) ----------
+alter table public.profiles add column if not exists courtesy boolean not null default false;
+drop function if exists public.admin_delete_user(uuid);
+
+create or replace function public.sp_new_user() returns trigger
+language plpgsql security definer set search_path = public as $$
+declare pro text[]; vip boolean;
+begin
+  select array(select lower(jsonb_array_elements_text(doc->'proEmails'))) into pro from app_config where id = 1;
+  vip := lower(new.email) = 'ivanbrasileiro2110@gmail.com' or lower(new.email) = any(coalesce(pro, '{}'));
+  insert into profiles (id, email, plan, courtesy, doc) values (
+    new.id, lower(new.email), case when vip then 'pro' else 'free' end, vip,
+    jsonb_build_object(
+      'id', new.id::text, 'email', lower(new.email),
+      'name', coalesce(nullif(new.raw_user_meta_data->>'name', ''), split_part(new.email, '@', 1)),
+      'pos', 'AUTO', 'photo', null, 'roles', '[]'::jsonb,
+      'createdAt', (extract(epoch from now()) * 1000)::bigint))
+  on conflict (id) do nothing;
+  return new;
+end $$;
+
+create or replace function public.sp_profiles_before() returns trigger
 language plpgsql security definer set search_path = public as $$
 begin
-  if not is_creator() then raise exception 'not_allowed'; end if;
-  if p_uid = auth.uid() then raise exception 'cannot_delete_self'; end if;
-  -- tira o card da pessoa das peladas dos outros
-  update peladas set version = version + 1,
-    doc = jsonb_set(doc, '{state,players}', coalesce((
-      select jsonb_agg(x) from jsonb_array_elements(coalesce(doc->'state'->'players', '[]')) x
-       where x->>'uid' is distinct from p_uid::text), '[]'::jsonb))
-   where owner <> p_uid and exists (
-     select 1 from jsonb_array_elements(coalesce(doc->'state'->'players', '[]')) x where x->>'uid' = p_uid::text);
-  -- apaga a conta (perfil, peladas em que é dono, campeonatos, quadras e fotos vão junto)
-  delete from auth.users where id = p_uid;
+  if tg_op = 'UPDATE' then
+    new.id := old.id; new.email := old.email;
+    if not is_creator() then new.plan := old.plan; new.courtesy := old.courtesy; end if;
+  elsif auth.uid() is not null and not is_creator() then
+    new.plan := 'free'; new.courtesy := false;
+  end if;
+  if new.courtesy then new.plan := 'pro'; end if;
+  new.doc := new.doc || jsonb_build_object('id', new.id::text, 'email', new.email, 'plan', new.plan, 'courtesy', new.courtesy);
+  return new;
 end $$;
-revoke execute on function public.admin_delete_user(uuid) from anon, public;
-grant execute on function public.admin_delete_user(uuid) to authenticated;
+
+create or replace function public.sp_profiles_after() returns trigger
+language plpgsql security definer set search_path = public as $$
+begin
+  if new.plan is distinct from old.plan or new.courtesy is distinct from old.courtesy then
+    update peladas set version = version + 1 where owner = new.id;
+  end if;
+  return null;
+end $$;
+
+create or replace function public.sp_peladas_before() returns trigger
+language plpgsql security definer set search_path = public as $$
+declare p text; c boolean; nowner uuid;
+begin
+  if tg_op = 'INSERT' then
+    new.owner := coalesce(auth.uid(), new.owner);
+    if new.code is null or new.code = '' then
+      new.code := 'SP' || lpad(nextval('pelada_code_seq')::text, 4, '0');
+    end if;
+  else
+    new.code := old.code;
+    nowner := try_uuid(new.doc->>'ownerUid');
+    if nowner is not null and nowner is distinct from old.owner and (
+         auth.uid() = old.owner or is_creator()
+         or (nowner = auth.uid() and jsonb_typeof(old.doc->'state'->'transfer') = 'object')) then
+      new.owner := nowner;
+    else
+      new.owner := old.owner;
+    end if;
+  end if;
+  select plan, courtesy into p, c from profiles where id = new.owner;
+  new.doc := jsonb_set(jsonb_set(new.doc, '{code}', to_jsonb(new.code)), '{ownerUid}', to_jsonb(new.owner::text));
+  if jsonb_typeof(new.doc->'state'->'pelada') = 'object' then
+    new.doc := jsonb_set(jsonb_set(new.doc, '{state,pelada,plan}', to_jsonb(coalesce(p, 'free'))),
+                         '{state,pelada,courtesy}', to_jsonb(coalesce(c, false)));
+  end if;
+  return new;
+end $$;
+
+-- e-mails da lista ganham Acesso Total quando a lista muda
+create or replace function public.sp_config_after() returns trigger
+language plpgsql security definer set search_path = public as $$
+begin
+  update profiles set plan = 'pro', courtesy = true, version = version + 1
+   where not courtesy and email in (select lower(jsonb_array_elements_text(coalesce(new.doc->'proEmails', '[]'))));
+  return null;
+end $$;

@@ -770,8 +770,8 @@ const COLS={
     canIns:c=>c.ownerUid===Cloud.uid,canWrite:()=>true},
   quadras:{list:()=>G.quadras,set:a=>{G.quadras=a;},id:q=>q.id,row:q=>({id:q.id,owner:q.ownerUid,doc:q}),fromRow:r=>{const q=jclone(r.doc)||{};q.id=r.id;q.ownerUid=r.owner;return q;},
     canIns:q=>q.ownerUid===Cloud.uid,canWrite:q=>q.ownerUid===Cloud.uid||isCreator()},
-  profiles:{list:()=>G.users,set:a=>{G.users=a;},id:u=>u.id,row:u=>({id:u.id,email:u.email,plan:u.plan==="pro"?"pro":"free",doc:u}),
-    fromRow:r=>{const u=jclone(r.doc)||{};u.id=r.id;u.email=r.email;u.plan=r.plan;return u;},
+  profiles:{list:()=>G.users,set:a=>{G.users=a;},id:u=>u.id,row:u=>({id:u.id,email:u.email,plan:u.plan==="pro"?"pro":"free",courtesy:!!u.courtesy,doc:u}),
+    fromRow:r=>{const u=jclone(r.doc)||{};u.id=r.id;u.email=r.email;u.plan=r.plan;u.courtesy=!!r.courtesy;return u;},
     canIns:u=>u.id===Cloud.uid,canWrite:u=>!u._stub&&isUuid(u.id)&&(u.id===Cloud.uid||isCreator())}
 };
 const COL_ORDER=["profiles","peladas","camps","quadras"];
@@ -807,7 +807,7 @@ async function flushCol(col){const C=COLS[col],seen=new Set();
       if(error){if(error.code==="23505"){const d=await fetchRow(col,id);if(d)cloudIngest(col,d);continue;}throw error;}
       if(docStr(col,it)===s)cloudPut(col,data);else Cloud.base[key]={v:data.version,s:stableStr(C.row(C.fromRow(data)).doc)};continue;}
     if(!C.canWrite(it))continue;
-    const upd={doc:row.doc,version:b.v+1};if(col==="profiles")upd.plan=row.plan;
+    const upd={doc:row.doc,version:b.v+1};if(col==="profiles"){upd.plan=row.plan;upd.courtesy=row.courtesy;}
     const {data,error}=await sb.from(col).update(upd).eq("id",id).select();
     if(error){if(/version_conflict/.test(error.message||"")||error.code==="40001"){const d=await fetchRow(col,id);if(!d){cloudDrop(col,id);continue;}Cloud.base[key].v=Math.min(b.v,d.version-1);cloudIngest(col,d);continue;}throw error;}
     if(!data||!data.length){const d=await fetchRow(col,id);if(d)cloudPut(col,d);else cloudDrop(col,id);renderSoon();continue;}
@@ -1017,7 +1017,7 @@ const SIL3D=`<svg viewBox="0 0 200 230" preserveAspectRatio="xMidYMax meet" aria
 const SIL='<svg viewBox="0 0 100 100" fill="#B8F26B"><circle cx="50" cy="34" r="18"/><path d="M14 100c2-24 17-38 36-38s34 14 36 38z"/></svg>';
 function ava(p,cls=""){const ph=img(p.art)||img(p.photo);return `<span class="ava ${cls}">${ph?`<img src="${ph}" alt="">`:esc(initials(p.name))}</span>`;}
 function nameBlock(p){return `<span class="grow nb"><span class="pname trunc">${esc(p.name)}</span>${posChip(p)}</span>`;}
-function planBadge(){return isPro()?`<span class="pill gold">Plano Pro</span>`:`<span class="pill">Plano Grátis</span>`;}
+function planBadge(){return isPro()&&S.pelada.courtesy?`<span class="pill gold">Acesso Total</span>`:isPro()?`<span class="pill gold">Plano Pro</span>`:`<span class="pill">Plano Grátis</span>`;}
 function posChip(p){const ps=posOf(p);return `<span class="pos${ps==="GOL"?" gk":""}">${ps}</span>`;}
 function lvChips(p){return posOf(p)==="GOL"?`<span class="lv"><span><b>${fi(p.gk??50)}</b> gol</span></span>`:`<span class="lv"><span><b>${fi(p.a)}</b> atq</span><span><b>${fi(p.d)}</b> def</span></span>`;}
 
@@ -2005,8 +2005,10 @@ function alertRow(x){const P=x.P,ow=G.users.find(u=>u.id===P.ownerUid)||{},lvl=x
     <span class="status">${lvl===3?"3 meses":"1 mês"} sem sorteio · ${P.lastDrawAt?"último sorteio "+dmy(P.lastDrawAt):"nunca sorteou (criada "+dmy(P.createdAt)+")"}</span><br>
     <span class="status">Dono: ${esc(ow.name||"—")} · ${esc(ow.email||"")}${P.contactedAt?" · contatado em "+dmy(P.contactedAt):""}</span>
     <span style="display:flex;gap:6px;margin-top:8px;flex-wrap:wrap">${ph?`<a class="mbtn" style="text-decoration:none" href="https://wa.me/${ph.length<=11?"55"+ph:ph}?text=${encodeURIComponent(msg)}" target="_blank" rel="noopener">WhatsApp</a>`:""}<a class="mbtn" style="text-decoration:none" href="mailto:${esc(ow.email||"")}?subject=${encodeURIComponent("SemPanela · "+P.state.pelada.name)}&body=${encodeURIComponent(msg)}">E-mail</a><button class="mbtn l" data-act="crContacted" data-v="${P.code}">${P.contactedAt?"Desmarcar contato":"Marcar como contatado"}</button></span></span></div>`;}
+const PLAN_L={free:"Grátis",pro:"Pro",vip:"Acesso Total"};const planKey=u=>u.courtesy?"vip":u.plan==="pro"?"pro":"free";
+function planSel(u){const k=planKey(u);return `<div class="seg" role="group" aria-label="Plano de ${esc(u.name||"")}" style="margin:8px 0 0 46px;flex:0 0 calc(100% - 46px);max-width:calc(100% - 46px)">${["free","pro","vip"].map(x=>`<button data-act="crPlanSet" data-id="${u.id}" data-v="${x}" aria-pressed="${k===x}" style="font-size:13px">${PLAN_L[x]}</button>`).join("")}</div>`;}
 function viewCreator(){
-  const U=G.users,Ps=G.peladas.slice().sort((a,b)=>a.code<b.code?-1:1),pros=U.filter(u=>u.plan==="pro"&&ownedBy(u).length),totP=Ps.reduce((s,P)=>s+P.state.players.length,0),realSet=new Set(),semConta=Ps.reduce((s,P)=>s+P.state.players.filter(p=>{if(p.uid){realSet.add(p.uid);return false;}return true;}).length,0),realU=U.filter(u=>!u._stub);
+  const U=G.users,Ps=G.peladas.slice().sort((a,b)=>a.code<b.code?-1:1),pros=U.filter(u=>u.plan==="pro"&&!u.courtesy&&u.email!==CREATOR&&ownedBy(u).length),vips=U.filter(u=>u.courtesy&&!u._stub),totP=Ps.reduce((s,P)=>s+P.state.players.length,0),realSet=new Set(),semConta=Ps.reduce((s,P)=>s+P.state.players.filter(p=>{if(p.uid){realSet.add(p.uid);return false;}return true;}).length,0),realU=U.filter(u=>!u._stub);
   const price=num(G.cfg.price),Qs=G.quadras,qPaying=Qs.filter(q=>!(q.trialEnds>Date.now())),qRev=qPaying.reduce((s,q)=>s+qMRR(q),0);
   let h=`${BRAND}<div class="hero"><div class="eyebrow">Criador do app</div><h1>Painel SemPanela</h1><p class="sub">Tudo o que está registrado no app.</p></div>
   <div class="seg" role="group" aria-label="Painel">${[["geral","Geral"],["peladas","Peladas"],["quadras","Quadras"],["usuarios","Usuários"],["config","Config"]].map(([k,l])=>`<button data-act="crSeg" data-v="${k}" aria-pressed="${crSeg===k}" style="font-size:13px">${l}</button>`).join("")}</div>`;
@@ -2014,13 +2016,13 @@ function viewCreator(){
     h+=`<div class="section"><div class="sh"><span>ALERTAS DE RETENÇÃO</span><span>${al.length}</span></div><div class="group">${al.length?`${a3.length?`<div class="cell"><span class="status" style="color:var(--down);font-weight:700">3 MESES SEM SORTEIO · ${a3.length}</span></div>`+a3.map(alertRow).join(""):""}${a1.length?`<div class="cell"><span class="status" style="color:var(--gold);font-weight:700">1 MÊS SEM SORTEIO · ${a1.length}</span></div>`+a1.map(alertRow).join(""):""}`:`<div class="empty">Nenhuma pelada parada. Todas sortearam times no último mês.</div>`}</div>
       <p class="sf">No app final, você recebe um e-mail e uma notificação quando uma pelada completa 1 mês e 3 meses sem sorteio.</p></div>
     <div class="section"><div class="kpis"><div class="kpi"><span class="l">Contas criadas</span><span class="v tnum">${realU.length}</span></div><div class="kpi"><span class="l">Peladas</span><span class="v tnum">${Ps.length}</span></div>
-      <div class="kpi gold"><span class="l">Donos no Pro</span><span class="v tnum">${pros.length}</span></div><div class="kpi"><span class="l">Peladeiros com conta</span><span class="v tnum">${realSet.size}</span></div><div class="kpi"><span class="l">Peladeiros sem conta</span><span class="v tnum">${semConta}</span></div><div class="kpi"><span class="l">Peladeiros no total</span><span class="v tnum">${realSet.size+semConta}</span></div>
+      <div class="kpi gold"><span class="l">Donos no Pro (pagantes)</span><span class="v tnum">${pros.length}</span></div><div class="kpi"><span class="l">Acesso Total</span><span class="v tnum">${vips.length}</span></div><div class="kpi"><span class="l">Peladeiros com conta</span><span class="v tnum">${realSet.size}</span></div><div class="kpi"><span class="l">Peladeiros sem conta</span><span class="v tnum">${semConta}</span></div><div class="kpi"><span class="l">Peladeiros no total</span><span class="v tnum">${realSet.size+semConta}</span></div>
       <div class="kpi"><span class="l">Quadras (pagando / teste)</span><span class="v tnum">${qPaying.length} / ${Qs.length-qPaying.length}</span></div><div class="kpi gold"><span class="l">Receita Quadras</span><span class="v tnum money">${brl(qRev)}</span></div>
       <div class="kpi gold" style="grid-column:span 2"><span class="l">Receita mensal estimada (Pro + Quadras)</span><span class="v tnum">${brl(pros.length*price+qRev)}</span></div></div><p class="sf"><b>Com conta:</b> pessoas que criaram login e entraram em alguma pelada (cada pessoa conta uma vez, mesmo em várias peladas). <b>Sem conta:</b> nomes que o Dono de Pelada cadastrou no elenco e que ainda não criaram login.</p></div>
     <div class="section"><div class="sh"><span>ÚLTIMOS CADASTROS</span></div><div class="group">${realU.slice().sort((a,b)=>(b.createdAt||0)-(a.createdAt||0)).slice(0,5).map(u=>`<div class="cell"><span class="ava sm">${esc(initials(u.name))}</span><span class="grow"><b>${esc(u.name)}</b><br><span class="status">${esc(u.email)}</span></span><span class="status">${dmy(u.createdAt)}</span></div>`).join("")}</div></div>`;
   } else if(crSeg==="peladas"){
     h+=`<div class="section"><div class="sh"><span>${Ps.length} PELADAS · EM ORDEM DE CRIAÇÃO</span></div><div class="group">${Ps.map(P=>{const ow=U.find(u=>u.id===P.ownerUid)||{};const pro=P.state.pelada.plan==="pro";
-      const d=idleDays(P);return `<div class="cell"><span class="code">${P.code}</span><span class="grow"><b>${esc(P.state.pelada.name)}</b><br><span class="status">${esc(ow.name||"—")} · ${P.state.players.length} peladeiros (${P.state.players.filter(p=>p.uid).length} com conta) · criada ${dmy(P.createdAt)}</span><br><span class="status" style="color:${d>=90?"var(--down)":d>=30?"var(--gold)":"var(--muted)"}">${P.lastDrawAt?"Último sorteio: "+(d===0?"hoje":"há "+d+(d===1?" dia":" dias")):"Nunca sorteou"}${P.lastSeenAt?" · último acesso "+dmy(P.lastSeenAt):""}</span></span><span style="display:flex;flex-direction:column;align-items:flex-end;gap:6px"><span class="pill ${pro?"gold":""}">${pro?"Pro":"Grátis"}</span><button class="mini" style="color:var(--down)" data-act="crDelPelada" data-id="${P.id}">Excluir</button></span></div>`;}).join("")||`<div class="empty">Nenhuma pelada ainda.</div>`}</div>
+      const d=idleDays(P);return `<div class="cell"><span class="code">${P.code}</span><span class="grow"><b>${esc(P.state.pelada.name)}</b><br><span class="status">${esc(ow.name||"—")} · ${P.state.players.length} peladeiros (${P.state.players.filter(p=>p.uid).length} com conta) · criada ${dmy(P.createdAt)}</span><br><span class="status" style="color:${d>=90?"var(--down)":d>=30?"var(--gold)":"var(--muted)"}">${P.lastDrawAt?"Último sorteio: "+(d===0?"hoje":"há "+d+(d===1?" dia":" dias")):"Nunca sorteou"}${P.lastSeenAt?" · último acesso "+dmy(P.lastSeenAt):""}</span></span><span style="display:flex;flex-direction:column;align-items:flex-end;gap:6px"><span class="pill ${pro?"gold":""}">${P.state.pelada.courtesy?"Acesso Total":pro?"Pro":"Grátis"}</span></span></div>`;}).join("")||`<div class="empty">Nenhuma pelada ainda.</div>`}</div>
       <p class="sf">O plano é do Dono de Pelada e vale para todas as peladas dele. Mude na aba Usuários.</p></div>`;
   } else if(crSeg==="quadras"){
     h+=`<div class="section"><div class="sh"><span>${Qs.length} QUADRAS</span></div><div class="group">${Qs.map(q=>{const ow=U.find(u=>u.id===q.ownerUid)||{},tr=q.trialEnds>Date.now();
@@ -2030,11 +2032,11 @@ function viewCreator(){
     h+=`<div class="section"><input class="search" id="crQ" type="search" placeholder="Buscar por nome ou e-mail" value="${esc(crQ)}" data-input="crq"></div>
     <div class="section" style="margin-top:12px"><div class="sh"><span>CRM · ${list.length} USUÁRIOS</span></div><div class="group">${list.map(u=>{const own=ownedBy(u),mem=memberOf(u).filter(P=>P.ownerUid!==u.id),qd=G.quadras.find(x=>x.ownerUid===u.id);
       const roles=[own.length?"Dono de Pelada":"",mem.length?"Peladeiro":"",qd?"Dono de Quadra":""].filter(Boolean).join(", ")||"Sem pelada ainda";
-      return `<div class="cell" style="align-items:flex-start;padding-top:12px;padding-bottom:12px"><span class="ava sm">${img(u.photo)?`<img src="${img(u.photo)}" alt="">`:esc(initials(u.name))}</span><span class="grow"><b>${esc(u.name)}</b>${u.email===CREATOR?' <span class="pill gold">criador</span>':""}<br><span class="status">${esc(u.email)}</span><br>
+      return `<div class="cell" style="align-items:flex-start;padding-top:12px;padding-bottom:12px;flex-wrap:wrap"><span class="ava sm">${img(u.photo)?`<img src="${img(u.photo)}" alt="">`:esc(initials(u.name))}</span><span class="grow"><b>${esc(u.name)}</b>${u.email===CREATOR?' <span class="pill gold">criador</span>':""}<br><span class="status">${esc(u.email)}</span><br>
         <span class="status">${roles} · desde ${dmy(u.createdAt)}${u.lastLogin?" · último acesso "+dmy(u.lastLogin):""}</span><br>
         <span class="status">${own.length?"Dono: "+own.map(P=>P.code).join(", "):""}${own.length&&mem.length?" · ":""}${mem.length?"Joga: "+mem.map(P=>P.code).join(", "):""}${qd?(own.length||mem.length?" · ":"")+"Quadra: "+esc(qd.name)+" ("+G.cfg.tiers[qd.tier].name+")":""}</span></span>
-        <span style="display:flex;flex-direction:column;align-items:flex-end;gap:6px"><button class="mini" data-act="crPlan" data-id="${u.id}">${u.plan==="pro"?'<span class="pill gold">Pro</span>':'<span class="pill">Grátis</span>'}</button>${u.email===CREATOR?"":`<button class="mini" style="color:var(--down)" data-act="crDelUser" data-id="${u.id}">Excluir</button>`}</span></div>`;}).join("")||`<div class="empty">Ninguém encontrado.</div>`}</div>
-      <p class="sf">Toque no plano para alternar o Pro do Dono de Pelada entre Grátis e Pro. Excluir apaga a conta, as peladas em que a pessoa é dona e o card dela nas outras peladas.</p></div>`;
+        </div>${planSel(u)}`;}).join("")||`<div class="empty">Ninguém encontrado.</div>`}</div>
+      <p class="sf"><b>Grátis</b> e <b>Pro</b> são os planos normais (o Pro entra na receita). <b>Acesso Total</b> libera tudo do Pro sem cobrança e não entra na receita. Para tirar, é só escolher outro plano.</p></div>`;
   } else {
     const T=G.cfg.tiers,inp=(id,lbl,val,k,f,w=90,mode="decimal")=>`<div class="cell"><label class="lbl" for="${id}" style="width:auto;flex:1">${lbl}</label><input class="inl" id="${id}" inputmode="${mode}" value="${esc(val)}" data-input="cfgt" data-k="${k}" data-f="${f}" style="max-width:${w}px"></div>`;
     h+=`<div class="section"><div class="sh"><span>SEMPANELA (DONO DE PELADA)</span></div><div class="group">
@@ -2042,7 +2044,7 @@ function viewCreator(){
       <div class="cell"><label class="lbl" for="cfF" style="width:auto;flex:1">Peladeiros no Grátis</label><input class="inl" id="cfF" type="number" inputmode="numeric" value="${G.cfg.freePlayers}" data-input="cfgfree" style="max-width:90px"></div>
       <div class="cell"><label class="lbl" for="cfE" style="width:auto;flex:1">Peladas por dono no Grátis</label><input class="inl" id="cfE" type="number" inputmode="numeric" value="${G.cfg.freePeladas}" data-input="cfgpel" style="max-width:90px"></div>
       <div class="cell"><label class="lbl" for="cfC" style="width:auto;flex:1">Campeonato avulso (R$)</label><input class="inl" id="cfC" inputmode="decimal" value="${esc(G.cfg.campPrice)}" data-input="cfgcamp" style="max-width:110px"></div>
-      <div class="cell" style="flex-direction:column;align-items:stretch;gap:6px"><span class="lbl" style="width:auto">E-mails com Pro liberado</span><textarea class="field" style="min-height:70px;font-size:15px" data-input="cfgvip" placeholder="um por linha">${esc(G.cfg.proEmails.join("\n"))}</textarea><span class="status">Quem entrar com esses e-mails ganha o Pro de graça. Não vira criador do app.</span></div></div></div>
+      <div class="cell" style="flex-direction:column;align-items:stretch;gap:6px"><span class="lbl" style="width:auto">E-mails com Acesso Total</span><textarea class="field" style="min-height:70px;font-size:15px" data-input="cfgvip" placeholder="um por linha">${esc(G.cfg.proEmails.join("\n"))}</textarea><span class="status">Quem criar conta com esses e-mails já entra com Acesso Total: tudo do Pro, sem cobrança e fora da receita. Não vira criador do app.</span></div></div></div>
     ${["quadra","arena","complexo"].map(k=>`<div class="section"><div class="sh"><span>QUADRAS · NÍVEL ${T[k].name.toUpperCase()}</span></div><div class="group">
       ${inp("cf_"+k+"_p","Preço (R$/mês)",T[k].price,k,"price",110)}
       ${inp("cf_"+k+"_c","Campos inclusos",T[k].campos,k,"campos",90,"numeric")}
@@ -3180,14 +3182,10 @@ document.addEventListener("click",e=>{
     case "joinReset":joinFound=null;joinDraft=null;joinErr="";pendingCode="";render();break;
     case "notifyMe":hud("Combinado! Avisamos quando abrir");break;
     case "crSeg":crSeg=v;render();break;
-    case "crDelPelada":{if(!isCreator())break;if(!el.dataset.ok){const P=G.peladas.find(x=>x.id===id);if(!P)break;openSheet({type:"confirm",title:"Excluir pelada",head:"Excluir “"+esc(P.state.pelada.name)+"” ("+P.code+")?",text:`Essa ação é definitiva. Some o elenco, os sorteios, a caixinha e as votações, e os ${P.state.players.length} peladeiros perdem o acesso.`,btn:"Excluir pelada",act:"crDelPelada"});sheet.pid=id;break;}
-      const pid=sheet&&sheet.pid;closeSheet();if(!pid)break;
-      if(CLOUD){hud("Excluindo…");sb.from("peladas").delete().eq("id",pid).select().then(({data,error})=>{if(error||!data||!data.length){hud("Não deu para excluir. Tente de novo.");return;}cloudDrop("peladas",pid);lsCache();render();hud("Pelada excluída");},()=>hud("Sem conexão. Tente de novo."));break;}
-      G.peladas=G.peladas.filter(x=>x.id!==pid);save();render();hud("Pelada excluída");break;}
-    case "crDelUser":{if(!isCreator())break;if(!el.dataset.ok){const u=G.users.find(x=>x.id===id);if(!u||u.email===CREATOR)break;const own=ownedBy(u);openSheet({type:"confirm",title:"Excluir conta",head:"Excluir a conta de "+esc(u.name||u.email)+"?",text:`Essa ação é definitiva. Apaga o login de ${esc(u.email||"")}, o perfil e as fotos${own.length?", as peladas em que é Dono de Pelada ("+own.map(P=>esc(P.state.pelada.name)).join(", ")+")":""} e o card nas outras peladas.`,btn:"Excluir conta",act:"crDelUser"});sheet.pid=id;break;}
-      const pid=sheet&&sheet.pid;closeSheet();const u=G.users.find(x=>x.id===pid);if(!u||u.email===CREATOR)break;
-      if(CLOUD){hud("Excluindo…");sb.rpc("admin_delete_user",{p_uid:pid}).then(({error})=>{if(error){hud("Não deu para excluir. Tente de novo.");return;}pull().then(()=>{render();hud("Conta excluída");},()=>{render();hud("Conta excluída");});},()=>hud("Sem conexão. Tente de novo."));break;}
-      G.peladas=G.peladas.filter(P=>P.ownerUid!==u.id);G.peladas.forEach(P=>{P.state.players=P.state.players.filter(p=>p.uid!==u.id);});G.quadras=G.quadras.filter(q=>q.ownerUid!==u.id);G.users=G.users.filter(x=>x.id!==u.id);save();render();hud("Conta excluída");break;}
+    case "crPlanSet":{if(!isCreator())break;const u=G.users.find(x=>x.id===id);if(!u||planKey(u)===v)break;
+      u.courtesy=v==="vip";setUserPlan(u,v==="free"?"free":"pro");G.peladas.filter(P=>P.ownerUid===u.id).forEach(P=>{P.state.pelada.courtesy=u.courtesy;});
+      if(v!=="vip"&&u.email)G.cfg.proEmails=G.cfg.proEmails.filter(e=>e!==u.email);
+      save();render();hud((u.name||u.email)+": "+PLAN_L[v]);break;}
     case "crPlan":{const u=G.users.find(x=>x.id===id);setUserPlan(u,u.plan==="pro"?"free":"pro");save();render();hud(u.name+": "+(u.plan==="pro"?"Plano Pro":"Plano Grátis"));break;}
     case "upos":{const u=meU();u.pos=v;save();render();break;}
     case "invite":if(!isOwner())break;openSheet({type:"invite"});break;
